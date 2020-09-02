@@ -28,6 +28,8 @@ PAL_cyan	= (6 EOR 7)
 PAL_yellow	= (3 EOR 7)
 PAL_white	= (7 EOR 7)
 
+ULA_Mode2	= &F4
+
 \ ******************************************************************
 \ *	SYSTEM defines
 \ ******************************************************************
@@ -41,9 +43,8 @@ MODE1_COL3=&A0
 \ *	MACROS
 \ ******************************************************************
 
-MACRO WAIT_CYCLES n
-
-PRINT "WAIT",n," CYCLES"
+MACRO WAIT_NOPS n
+PRINT "WAIT",n," CYCLES AS NOPS"
 
 IF n < 0
 	ERROR "Can't wait negative cycles!"
@@ -64,6 +65,20 @@ ELSE
 		NEXT
 	ENDIF
 ENDIF
+ENDMACRO
+
+MACRO WAIT_CYCLES n
+
+PRINT "WAIT",n," CYCLES"
+
+IF n >= 12
+	FOR i,1,n/12,1
+	JSR return
+	NEXT
+	WAIT_NOPS n MOD 12
+ELSE
+	WAIT_NOPS n
+ENDIF
 
 ENDMACRO
 
@@ -80,7 +95,7 @@ row_bytes = 640
 FramePeriod = 312*64-2
 
 ; Calculate here the timer value to interrupt at the desired line
-TimerValue = 32*64 - 2*64 - 2 - 25
+TimerValue = 32*64 - 2*64 - 2 - 25 + 40
 
 \\ 40 lines for vblank
 \\ 32 lines for vsync (vertical position = 35 / 39)
@@ -95,8 +110,8 @@ TimerValue = 32*64 - 2*64 - 2 - 25
 
 ORG &70
 GUARD &9F
-
-\\ Add ZP vars here
+.u 	skip 1
+.v	skip 1
 
 \ ******************************************************************
 \ *	CODE START
@@ -126,15 +141,45 @@ ENDIF
 	lda #8:sta &fe00
 	lda #&c0:sta &fe01
 
+	\\ Do any initialisation here!
+
+	\\ Set up screen.
+	{
+		.outer
+		ldx #7
+		.loop1
+		ldy #7
+		.loop2
+		lda pixel_pairs, X
+		.write_to
+		sta screen_addr
+		inc write_to+1
+		bne ok
+		inc write_to+2
+		bmi done
+		.ok
+		dey
+		bpl loop2
+		dex
+		bpl loop1
+		bmi outer
+		.done
+	}
+
+	\\ Init vars.
+	lda #0
+	sta u
+	sta v
+
 	\\ Disable interrupts
 	sei
 
-	\\ Sync to vsync
+	\\ Wait for vsync
 	{
 		lda #2
 		.vsync1
 		bit &FE4D
-		beq vsync1 \ wait for vsync
+		beq vsync1
 	}
 
 	\\ Set up Timer1 to start at the first scanline
@@ -150,6 +195,32 @@ ENDIF
 	\ ******************************************************************
 
 	.frame_loop
+	\\ Do any processing in vblank here!
+	inc u
+	inc v
+
+	\\ Set vertical colours
+	{
+		lda #0
+		sta ok+1
+		ldx u
+		.loop
+		txa
+		and #8
+		bne ok
+		lda #15
+		.ok
+		ora #0
+		sta &fe21
+		inx
+		clc
+		lda ok+1
+		adc #&10
+		sta ok+1
+		bcc loop
+	}
+
+	\\ Synchronise with start of screen display.
 	{
 		LDA #&40
 		.waitTimer1
@@ -181,47 +252,30 @@ ENDIF
 	\\ Now synced to scanline 0, character 0.
 
 	\\ Effect here!
-	ldx #0								; 2c
+	ldy #0								; 2c
+	ldx v
 
 	.scanline_loop
 	{
-		lda #PAL_red:sta &fe21			; 6c
-		lda #PAL_green:sta &fe21
-		lda #PAL_yellow:sta &fe21
-		lda #PAL_blue:sta &fe21
-		lda #PAL_magenta:sta &fe21
-		lda #PAL_cyan:sta &fe21
-		lda #PAL_white:sta &fe21
-		; 7*6c = 42c
+		txa								; 2c
+		and #16							; 2c
+		lsr a:lsr a:lsr a:lsr a			; 8c
+		ora #&f4						; 2c
+		sta &fe20						; 4c
+		inx								; 2c
+		WAIT_CYCLES 123-20
 
-		lda #PAL_red:sta &fe21			; 6c
-		lda #PAL_green:sta &fe21
-		lda #PAL_yellow:sta &fe21
-		lda #PAL_blue:sta &fe21
-		lda #PAL_magenta:sta &fe21
-		lda #PAL_cyan:sta &fe21
-		lda #PAL_white:sta &fe21
-		; 7*6c = 42c
-
-		lda #PAL_red:sta &fe21			; 6c
-		lda #PAL_green:sta &fe21
-		lda #PAL_yellow:sta &fe21
-		lda #PAL_blue:sta &fe21
-		lda #PAL_magenta:sta &fe21
-		lda #PAL_cyan:sta &fe21
-		; 6*6c = 36c
-
-		BIT 0							; 3c
-		dex								; 2c
+		iny								; 2c
 		bne scanline_loop				; 3c
 		; loop total = 128c
 	}
 
-	\\ Do any processing in vblank here!
-	lda #PAL_black:sta &fe21
-
-	JMP frame_loop
+	\\ Use branch to save a byte.
+	jmp frame_loop
 }
+
+.return
+rts
 
 .main_end
 
@@ -230,6 +284,17 @@ ENDIF
 \ ******************************************************************
 
 .data_start
+
+\\ pixel pairs
+.pixel_pairs
+equb %11111101		; 14, 15
+equb %11110001		; 12, 13
+equb %11001101		; 10, 11
+equb %11000001		; 8, 9
+equb %00111101		; 6, 7
+equb %00110001		; 4, 5
+equb %00001101		; 2, 3
+equb %00000001		; 0, 1
 
 .data_end
 
