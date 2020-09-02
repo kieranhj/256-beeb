@@ -95,7 +95,7 @@ row_bytes = 640
 FramePeriod = 312*64-2
 
 ; Calculate here the timer value to interrupt at the desired line
-TimerValue = 32*64 - 2*64 - 2 - 25 + 40
+TimerValue = 32*64 - 2*64 - 2 - 25 + 30
 
 \\ 40 lines for vblank
 \\ 32 lines for vsync (vertical position = 35 / 39)
@@ -110,8 +110,8 @@ TimerValue = 32*64 - 2*64 - 2 - 25 + 40
 
 ORG &70
 GUARD &9F
-.u 	skip 1
-.v	skip 1
+.u 		skip 1
+.v		skip 1
 
 \ ******************************************************************
 \ *	CODE START
@@ -141,7 +141,10 @@ ENDIF
 	lda #8:sta &fe00
 	lda #&c0:sta &fe01
 
-	\\ Do any initialisation here!
+	\\ Init vars.
+	lda #0
+	sta u
+	sta v
 
 	\\ Set up screen.
 	{
@@ -165,11 +168,6 @@ ENDIF
 		bmi outer
 		.done
 	}
-
-	\\ Init vars.
-	lda #0
-	sta u
-	sta v
 
 	\\ Disable interrupts
 	sei
@@ -314,6 +312,7 @@ SAVE "256beeb", start, end, main
 \ *	Space reserved for runtime buffers not preinitialised
 \ ******************************************************************
 
+ALIGN &100
 .bss_start
 
 .bss_end
@@ -330,7 +329,7 @@ PRINT "DATA size =",~data_end-data_start
 PRINT "BSS size =",~bss_end-bss_start
 PRINT "------"
 PRINT "HIGH WATERMARK =", ~P%
-PRINT "FREE =", ~start+_DEMO_SIZE-P%
+PRINT "FREE =", ~start+_DEMO_SIZE-end
 PRINT "------"
 
 \ ******************************************************************
