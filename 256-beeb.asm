@@ -3,6 +3,7 @@
 \ ******************************************************************
 
 _DEBUG = TRUE			; don't limit to 256b
+_STABLE_RASTER = FALSE
 _DEMO_SIZE = 256
 
 \ ******************************************************************
@@ -95,7 +96,7 @@ row_bytes = 640
 FramePeriod = 312*64-2
 
 ; Calculate here the timer value to interrupt at the desired line
-TimerValue = 32*64 - 2*64 - 2 - 25 + 30
+TimerValue = 32*64 - 2*64 - 2 - 25 + 40
 
 \\ 40 lines for vblank
 \\ 32 lines for vsync (vertical position = 35 / 39)
@@ -117,11 +118,11 @@ GUARD &9F
 \ *	CODE START
 \ ******************************************************************
 
-ORG &1900
+ORG &1C05
 IF _DEBUG
 GUARD screen_addr			; ensure code size doesn't hit start of screen memory
 ELSE
-GUARD &1900+_DEMO_SIZE
+GUARD &1C05+_DEMO_SIZE
 ENDIF
 
 .start
@@ -147,6 +148,7 @@ ENDIF
 	sta v
 
 	\\ Set up screen.
+	IF 1
 	{
 		.outer
 		ldx #7
@@ -168,6 +170,7 @@ ENDIF
 		bmi outer
 		.done
 	}
+	ENDIF
 
 	\\ Disable interrupts
 	sei
@@ -179,6 +182,31 @@ ENDIF
 		bit &FE4D
 		beq vsync1
 	}
+
+	; Roughly synced to VSync
+    IF _STABLE_RASTER
+    ; Now fine tune by waiting just less than one frame
+    ; and check if VSync has fired. Repeat until it hasn't.
+    ; One frame = 312*128 = 39936 cycles
+	{
+		.syncloop
+		STA &FE4D       ; 6
+		LDX #209        ; 2
+		.outerloop
+		LDY #37         ; 2
+		.innerloop
+		DEY             ; 2
+		BNE innerloop   ; 3/2 (innerloop = 5*37+2-1 = 186)
+		DEX             ; 2
+		BNE outerloop   ; 3/2 (outerloop = (186+2+3)*209+2-1 = 39920)
+		BIT &FE4D       ; 6
+		BNE syncloop    ; 3 (total = 39920+6+6+3 = 39935, one cycle less than a frame!)
+		IF HI(syncloop) <> HI(P%)
+		ERROR "This loop must execute within the same page"
+		ENDIF
+	}
+    ; We are synced precisely with VSync!
+	ENDIF
 
 	\\ Set up Timer1 to start at the first scanline
     LDA #LO(TimerValue):STA &FE44		; 8c
@@ -228,6 +256,7 @@ ENDIF
 		\\ Reading the T1 low order counter also resets the T1 interrupt flag in IFR
 		LDA &FE44
 
+		IF _STABLE_RASTER
 		\\ New stable raster NOP slide thanks to VectorEyes 8)
 		\\ Observed values $FA (early) - $F7 (late) so map these from 7 - 0
 		\\ then branch into NOPs to even this out.
@@ -246,8 +275,9 @@ ENDIF
 		NOP
 		NOP
 		.stable
+		ENDIF
+		\\ Now synced to scanline 0, character 0.
 	}
-	\\ Now synced to scanline 0, character 0.
 
 	\\ Effect here!
 	ldy #0								; 2c
