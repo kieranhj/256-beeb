@@ -31,6 +31,40 @@ PAL_white	= (7 EOR 7)
 
 ULA_Mode2	= &F4
 
+PIXEL_LEFT_0 = &00
+PIXEL_LEFT_1 = &02
+PIXEL_LEFT_2 = &08
+PIXEL_LEFT_3 = &0A
+PIXEL_LEFT_4 = &20
+PIXEL_LEFT_5 = &22
+PIXEL_LEFT_6 = &28
+PIXEL_LEFT_7 = &2A
+PIXEL_LEFT_8 = &80
+PIXEL_LEFT_9 = &82
+PIXEL_LEFT_A = &88
+PIXEL_LEFT_B = &8A
+PIXEL_LEFT_C = &A0
+PIXEL_LEFT_D = &A2
+PIXEL_LEFT_E = &A8
+PIXEL_LEFT_F = &AA
+
+PIXEL_RIGHT_0 = &00
+PIXEL_RIGHT_1 = &01
+PIXEL_RIGHT_2 = &04
+PIXEL_RIGHT_3 = &05
+PIXEL_RIGHT_4 = &10
+PIXEL_RIGHT_5 = &11
+PIXEL_RIGHT_6 = &14
+PIXEL_RIGHT_7 = &15
+PIXEL_RIGHT_8 = &40
+PIXEL_RIGHT_9 = &41
+PIXEL_RIGHT_A = &44
+PIXEL_RIGHT_B = &45
+PIXEL_RIGHT_C = &50
+PIXEL_RIGHT_D = &51
+PIXEL_RIGHT_E = &54
+PIXEL_RIGHT_F = &55
+
 \ ******************************************************************
 \ *	SYSTEM defines
 \ ******************************************************************
@@ -43,6 +77,11 @@ MODE1_COL3=&A0
 \ ******************************************************************
 \ *	MACROS
 \ ******************************************************************
+
+MACRO PAGE_ALIGN
+    PRINT "ALIGN LOST ", ~LO(((P% AND &FF) EOR &FF)+1), " BYTES"
+    ALIGN &100
+ENDMACRO
 
 MACRO WAIT_NOPS n
 PRINT "WAIT",n," CYCLES AS NOPS"
@@ -111,8 +150,18 @@ TimerValue = 32*64 - 2*64 - 2 - 25 + 40
 
 ORG &70
 GUARD &9F
-.u 		skip 1
-.v		skip 1
+.writeptr	skip 2
+
+.scanline	skip 1
+
+.kefrens_top_angle skip 1
+.kefrens_row_angle skip 1
+.kefrens_top_add skip 1
+.kefrens_add_index skip 1
+.kefrens_add_anim skip 1
+
+.crtc_reg	skip 2
+.crtc_val	skip 2
 
 \ ******************************************************************
 \ *	CODE START
@@ -143,34 +192,8 @@ ENDIF
 	lda #&c0:sta &fe01
 
 	\\ Init vars.
-	lda #0
-	sta u
-	sta v
 
 	\\ Set up screen.
-	IF 1
-	{
-		.outer
-		ldx #7
-		.loop1
-		ldy #7
-		.loop2
-		lda pixel_pairs, X
-		.write_to
-		sta screen_addr
-		inc write_to+1
-		bne ok
-		inc write_to+2
-		bmi done
-		.ok
-		dey
-		bpl loop2
-		dex
-		bpl loop1
-		bmi outer
-		.done
-	}
-	ENDIF
 
 	\\ Disable interrupts
 	sei
@@ -222,29 +245,31 @@ ENDIF
 
 	.frame_loop
 	\\ Do any processing in vblank here!
-	inc u
-	inc v
-
-	\\ Set vertical colours
 	{
-		lda #0
-		sta ok+1
-		ldx u
-		.loop
-		txa
-		and #8
-		bne ok
-		lda #15
-		.ok
-		ora #0
-		sta &fe21
-		inx
+		ldx #0
 		clc
-		lda ok+1
-		adc #&10
-		sta ok+1
-		bcc loop
+		.clear_loop
+		lda #0
+		sta screen_addr, X
+		sta screen_addr + &100, X
+		sta screen_addr + &200, X
+		txa
+		adc #8
+		tax
+		bne clear_loop
 	}
+
+	DEC kefrens_top_angle
+	LDA kefrens_top_angle
+	STA kefrens_row_angle
+
+	CLC
+	LDA kefrens_top_add
+	ADC kefrens_add_anim
+	STA kefrens_top_add
+
+	LDA kefrens_top_add
+	STA kefrens_add_index
 
 	\\ Synchronise with start of screen display.
 	{
@@ -279,24 +304,96 @@ ENDIF
 		\\ Now synced to scanline 0, character 0.
 	}
 
-	\\ Effect here!
-	ldy #0								; 2c
-	ldx v
+	\\ R9=0, R4=0, R7=&ff, R6=1
+	lda #9:sta &fe00
+	ldy #0:sty &fe01
 
+	lda #4:sta &fe00
+	sty &fe01 ;0
+
+	lda #7:sta &fe00
+	ldx #&ff:stx &fe01
+
+	lda #6:sta &fe00
+	iny:sta &fe01 ;1
+
+	dex:stx scanline ;254
+
+	\\ Effect here!
 	.scanline_loop
 	{
-		txa								; 2c
-		and #16							; 2c
-		lsr a:lsr a:lsr a:lsr a			; 8c
-		ora #&f4						; 2c
-		sta &fe20						; 4c
-		inx								; 2c
-		WAIT_CYCLES 123-20
+		ldy kefrens_row_angle				; 3c
+		lda kefrens_speed_table_1, y		; 4c
+		tay									; 2c
+		lda kefrens_width_table_1, Y		; 4c
+		clc									; 2c
+		ldy kefrens_add_index				; 3c
+		adc kefrens_add_table_1, Y			; 4c
+		tay									; 2c
 
-		iny								; 2c
-		bne scanline_loop				; 3c
-		; loop total = 128c
+		.left_side_nop_later
+		LDA kefrens_addr_table_LO, Y		; 4c
+		STA writeptr						; 3c
+		LDA kefrens_addr_table_HI, Y		; 4c
+		STA writeptr+1						; 3c
+
+		TYA:LSR A							; 4c
+		\\ 42c
+
+		BCS right
+		;2c
+		\\ Left
+		LDA # PIXEL_LEFT_7 OR PIXEL_RIGHT_3
+		LDY #0:STA (writeptr), Y			; 10c
+		LDA # PIXEL_LEFT_6 OR PIXEL_RIGHT_2
+		LDY #8:STA (writeptr), Y			; 10c
+		LDA # PIXEL_LEFT_5 OR PIXEL_RIGHT_1
+		LDY #16:STA (writeptr), Y			; 10c
+		LDY #24								; 2c
+		LDA (writeptr), Y					; 5c
+		AND #&55							; 2c
+		ORA #PIXEL_LEFT_4					; 2c
+		STA (writeptr), Y					; 6c
+		bne continue 						; 3c
+		\\ 52c
+
+		.right	;3c
+		\\ Left
+		LDY #0								; 2c
+		LDA (writeptr), Y					; 5c
+		AND #&AA							; 2c
+		ORA #PIXEL_RIGHT_7					; 2c
+		STA (writeptr), Y					; 6c
+
+		LDA # PIXEL_LEFT_3 OR PIXEL_RIGHT_6			; yellow/cyan
+		LDY #8:STA (writeptr), Y			; 10c
+		LDA # PIXEL_LEFT_2 OR PIXEL_RIGHT_5			; green/magenta
+		LDY #16:STA (writeptr), Y			; 10c
+		LDA # PIXEL_LEFT_1 OR PIXEL_RIGHT_4			; red/blue
+		LDY #24:STA (writeptr), Y			; 10c
+		NOP									; 2c
+		\\ 52c
+
+		.continue
+		INC kefrens_row_angle				; 5c
+		INC kefrens_add_index				; 5c
+		\\ 10c
+
+		WAIT_CYCLES 16
+		\\ 16c
+
+		DEC scanline						; 5c
+		BNE scanline_loop					; 3c
+		\\ 8c
 	}
+
+	\\ R4=6 - CRTC cycle is 32 + 7 more rows = 312 scanlines
+	LDA #4: STA &FE00
+	LDA #56: STA &FE01			; 312 - 256 = 56 scanlines
+
+	\\ R7=3 - vsync is at row 35 = 280 scanlines
+	LDA #7:	STA &FE00
+	LDA #25: STA &FE01			; 280 - 256 = 24 scanlines
 
 	\\ Use branch to save a byte.
 	jmp frame_loop
@@ -313,16 +410,36 @@ rts
 
 .data_start
 
-\\ pixel pairs
-.pixel_pairs
-equb %11111101		; 14, 15
-equb %11110001		; 12, 13
-equb %11001101		; 10, 11
-equb %11000001		; 8, 9
-equb %00111101		; 6, 7
-equb %00110001		; 4, 5
-equb %00001101		; 2, 3
-equb %00000001		; 0, 1
+PAGE_ALIGN
+.kefrens_addr_table_LO
+FOR x,0,255,1
+EQUB LO(screen_addr + ((x-48-2) DIV 2)*8)
+NEXT
+
+PAGE_ALIGN
+.kefrens_addr_table_HI
+FOR x,0,255,1
+EQUB HI(screen_addr + ((x-48-2) DIV 2)*8)
+NEXT
+
+PAGE_ALIGN
+.kefrens_width_table_1
+FOR y,0,255,1
+x=INT(128 + 76 * SIN(y * 2 * PI / 256))			\\ config 1
+EQUB x
+NEXT
+
+PAGE_ALIGN
+.kefrens_add_table_1
+FOR y,0,255,1
+EQUB 30 * SIN(y * 2 * PI / 256)				\\ config 1
+NEXT
+
+PAGE_ALIGN
+.kefrens_speed_table_1
+FOR n,0,&FF,1			; &13F for COS
+EQUB 127 * SIN(2 * PI * n / 256)				\\ config 1
+NEXT
 
 .data_end
 
