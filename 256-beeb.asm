@@ -321,20 +321,20 @@ ENDIF
 
 	\\ R9=0, R4=0, R7=&ff, R6=1
 	lda #9:sta &fe00
-	ldy #0:sty &fe01
+	stx &fe01			; X=0
 
 	lda #4:sta &fe00
-	sty &fe01 ;0
+	stx &fe01 			; X=0
 
-	lda #7:sta &fe00
-	dex:stx &fe01	;255
+	ldy #6:sty &fe00	; Y=6
+	lda #1:sta &fe01
 
-	lda #6:sta &fe00
-	iny:sta &fe01 ;1
+	iny:sty &fe00		; Y=7
+	dex:stx &fe01		; X=255
+	dex:stx scanlines 	; X=254
 
-	dex:stx scanlines ;254
-
-	ldx index:dex:stx index
+	\\ Update index per frame.
+	dec index:ldx index
 
 	\\ Effect here!
 	.scanline_loop
@@ -349,7 +349,6 @@ ENDIF
 		lsr a								; 2c
 
 		\\ Multiply by 8 and add screen address.
-		clc									; 2c
 		asl a:rol writeptr+1				; 7c
 		asl a:rol writeptr+1				; 7c
 		asl a:rol writeptr+1				; 7c
@@ -357,7 +356,7 @@ ENDIF
 		lda writeptr+1						; 3c
 		adc #HI(&3000)						; 2c
 		sta writeptr+1						; 3c
-		; 56c
+		; 54c
 
 		\\ Plot the bar.
 		LDA # PIXEL_LEFT_7 OR PIXEL_RIGHT_3
@@ -370,24 +369,25 @@ ENDIF
 		LDY #24:STA (writeptr), Y			; 10c
 		; 40c
 
-		\\ Update indices.
+		\\ Update indices per line.
 		inx									; 2c
 		inc index2							; 5c
 
 		WAIT_CYCLES 17
+		LDA #26								; 2c
 
 		dec scanlines						; 5c
 		bne scanline_loop					; 3c
 		; 5c
 	}
 
+	\\ R7=3 - vsync is at row 35 = 280 scanlines
+	\\ R7 was last one to be programmed.
+	STA &FE01
+
 	\\ R4=6 - CRTC cycle is 32 + 7 more rows = 312 scanlines
 	LDA #4: STA &FE00
-	LDA #57: STA &FE01			; 312 - 256 = 56 scanlines
-
-	\\ R7=3 - vsync is at row 35 = 280 scanlines
-	LDA #7:	STA &FE00
-	LDA #26: STA &FE01			; 280 - 256 = 24 scanlines
+	LDA #57: STA &FE01
 
 	\\ Use branch to save a byte.
 	jmp frame_loop
