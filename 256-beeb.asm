@@ -135,7 +135,7 @@ row_bytes = 640
 FramePeriod = 312*64-2
 
 ; Calculate here the timer value to interrupt at the desired line
-TimerValue = 32*64 - 2*64 - 2 - 25 + 40
+TimerValue = 32*64 - 2*64 - 2 - 25 + 10
 
 \\ 40 lines for vblank
 \\ 32 lines for vsync (vertical position = 35 / 39)
@@ -151,27 +151,19 @@ TimerValue = 32*64 - 2*64 - 2 - 25 + 40
 ORG &70
 GUARD &9F
 .writeptr	skip 2
-
-.scanline	skip 1
-
-.kefrens_top_angle skip 1
-.kefrens_row_angle skip 1
-.kefrens_top_add skip 1
-.kefrens_add_index skip 1
-.kefrens_add_anim skip 1
-
-.crtc_reg	skip 2
-.crtc_val	skip 2
+.scanlines	skip 1
+.index 		skip 1
+.index2 	skip 1
 
 \ ******************************************************************
 \ *	CODE START
 \ ******************************************************************
 
-ORG &1C05
+ORG &1900
 IF _DEBUG
 GUARD screen_addr			; ensure code size doesn't hit start of screen memory
 ELSE
-GUARD &1C05+_DEMO_SIZE
+GUARD &1900+_DEMO_SIZE
 ENDIF
 
 .start
@@ -191,12 +183,47 @@ ENDIF
 	lda #8:sta &fe00
 	lda #&c0:sta &fe01
 
-	\\ Init vars.
+	\\ Generate 256b sine table.
+	\\ Taken from: http://www.sizecoding.org/wiki/6502_based_CPUs#Atari_8bit_family
+	{
+		ldx #0
+		ldy #$3f
+	.make_sine
+	.value_lo
+		lda #0
+		clc
+	.delta_lo
+		adc #0
+		sta value_lo+1
+	.value_hi
+		lda #0
+	.delta_hi
+		adc #0
+		sta value_hi+1
 
+		sta sinewave+$c0,x
+		sta sinewave+$80,y
+		eor #$7f
+		sta sinewave+$40,x
+		sta sinewave+$00,y
+
+		lda delta_lo+1
+		adc #8
+		sta delta_lo+1
+		bcc nothing
+		inc delta_hi+1
+	.nothing
+		inx
+		dey
+		bpl make_sine
+	}
+	\\ C=1
+
+	\\ Init vars.
 	\\ Set up screen.
 
 	\\ Disable interrupts
-	sei
+	sei 	; not needed from !BOOT?
 
 	\\ Wait for vsync
 	{
@@ -247,29 +274,16 @@ ENDIF
 	\\ Do any processing in vblank here!
 	{
 		ldx #0
-		clc
+	;	clc				; normally C=0 except first time.
 		.clear_loop
 		lda #0
 		sta screen_addr, X
 		sta screen_addr + &100, X
 		sta screen_addr + &200, X
-		txa
-		adc #8
-		tax
+		txa:adc #8:tax
 		bne clear_loop
 	}
-
-	DEC kefrens_top_angle
-	LDA kefrens_top_angle
-	STA kefrens_row_angle
-
-	CLC
-	LDA kefrens_top_add
-	ADC kefrens_add_anim
-	STA kefrens_top_add
-
-	LDA kefrens_top_add
-	STA kefrens_add_index
+	\\ X=0
 
 	\\ Synchronise with start of screen display.
 	{
@@ -303,6 +317,7 @@ ENDIF
 		ENDIF
 		\\ Now synced to scanline 0, character 0.
 	}
+	.here
 
 	\\ R9=0, R4=0, R7=&ff, R6=1
 	lda #9:sta &fe00
@@ -312,93 +327,71 @@ ENDIF
 	sty &fe01 ;0
 
 	lda #7:sta &fe00
-	ldx #&ff:stx &fe01
+	dex:stx &fe01	;255
 
 	lda #6:sta &fe00
 	iny:sta &fe01 ;1
 
-	dex:stx scanline ;254
+	dex:stx scanlines ;254
+
+	ldx index:dex:stx index
 
 	\\ Effect here!
 	.scanline_loop
 	{
-		ldy kefrens_row_angle				; 3c
-		lda kefrens_speed_table_1, y		; 4c
-		tay									; 2c
-		lda kefrens_width_table_1, Y		; 4c
+		\\ Calculate X position.
+		lda #0:sta writeptr+1				; 5c
+		lda sinewave, X						; 4c
+		lsr a:lsr a							; 4c
+
+		ldy index2							; 3c
+		adc sinewave, Y						; 4c
+		lsr a								; 2c
+
+		\\ Multiply by 8 and add screen address.
 		clc									; 2c
-		ldy kefrens_add_index				; 3c
-		adc kefrens_add_table_1, Y			; 4c
-		tay									; 2c
+		asl a:rol writeptr+1				; 7c
+		asl a:rol writeptr+1				; 7c
+		asl a:rol writeptr+1				; 7c
+		sta writeptr						; 3c
+		lda writeptr+1						; 3c
+		adc #HI(&3000)						; 2c
+		sta writeptr+1						; 3c
+		; 56c
 
-		.left_side_nop_later
-		LDA kefrens_addr_table_LO, Y		; 4c
-		STA writeptr						; 3c
-		LDA kefrens_addr_table_HI, Y		; 4c
-		STA writeptr+1						; 3c
-
-		TYA:LSR A							; 4c
-		\\ 42c
-
-		BCS right
-		;2c
-		\\ Left
+		\\ Plot the bar.
 		LDA # PIXEL_LEFT_7 OR PIXEL_RIGHT_3
 		LDY #0:STA (writeptr), Y			; 10c
 		LDA # PIXEL_LEFT_6 OR PIXEL_RIGHT_2
 		LDY #8:STA (writeptr), Y			; 10c
 		LDA # PIXEL_LEFT_5 OR PIXEL_RIGHT_1
 		LDY #16:STA (writeptr), Y			; 10c
-		LDY #24								; 2c
-		LDA (writeptr), Y					; 5c
-		AND #&55							; 2c
-		ORA #PIXEL_LEFT_4					; 2c
-		STA (writeptr), Y					; 6c
-		bne continue 						; 3c
-		\\ 52c
-
-		.right	;3c
-		\\ Left
-		LDY #0								; 2c
-		LDA (writeptr), Y					; 5c
-		AND #&AA							; 2c
-		ORA #PIXEL_RIGHT_7					; 2c
-		STA (writeptr), Y					; 6c
-
-		LDA # PIXEL_LEFT_3 OR PIXEL_RIGHT_6			; yellow/cyan
-		LDY #8:STA (writeptr), Y			; 10c
-		LDA # PIXEL_LEFT_2 OR PIXEL_RIGHT_5			; green/magenta
-		LDY #16:STA (writeptr), Y			; 10c
-		LDA # PIXEL_LEFT_1 OR PIXEL_RIGHT_4			; red/blue
+		LDA # PIXEL_LEFT_4
 		LDY #24:STA (writeptr), Y			; 10c
-		NOP									; 2c
-		\\ 52c
+		; 40c
 
-		.continue
-		INC kefrens_row_angle				; 5c
-		INC kefrens_add_index				; 5c
-		\\ 10c
+		\\ Update indices.
+		inx									; 2c
+		inc index2							; 5c
 
-		WAIT_CYCLES 16
-		\\ 16c
+		WAIT_CYCLES 17
 
-		DEC scanline						; 5c
-		BNE scanline_loop					; 3c
-		\\ 8c
+		dec scanlines						; 5c
+		bne scanline_loop					; 3c
+		; 5c
 	}
 
 	\\ R4=6 - CRTC cycle is 32 + 7 more rows = 312 scanlines
 	LDA #4: STA &FE00
-	LDA #56: STA &FE01			; 312 - 256 = 56 scanlines
+	LDA #57: STA &FE01			; 312 - 256 = 56 scanlines
 
 	\\ R7=3 - vsync is at row 35 = 280 scanlines
 	LDA #7:	STA &FE00
-	LDA #25: STA &FE01			; 280 - 256 = 24 scanlines
+	LDA #26: STA &FE01			; 280 - 256 = 24 scanlines
 
 	\\ Use branch to save a byte.
 	jmp frame_loop
 }
-
 .return
 rts
 
@@ -409,37 +402,6 @@ rts
 \ ******************************************************************
 
 .data_start
-
-PAGE_ALIGN
-.kefrens_addr_table_LO
-FOR x,0,255,1
-EQUB LO(screen_addr + ((x-48-2) DIV 2)*8)
-NEXT
-
-PAGE_ALIGN
-.kefrens_addr_table_HI
-FOR x,0,255,1
-EQUB HI(screen_addr + ((x-48-2) DIV 2)*8)
-NEXT
-
-PAGE_ALIGN
-.kefrens_width_table_1
-FOR y,0,255,1
-x=INT(128 + 76 * SIN(y * 2 * PI / 256))			\\ config 1
-EQUB x
-NEXT
-
-PAGE_ALIGN
-.kefrens_add_table_1
-FOR y,0,255,1
-EQUB 30 * SIN(y * 2 * PI / 256)				\\ config 1
-NEXT
-
-PAGE_ALIGN
-.kefrens_speed_table_1
-FOR n,0,&FF,1			; &13F for COS
-EQUB 127 * SIN(2 * PI * n / 256)				\\ config 1
-NEXT
 
 .data_end
 
@@ -462,6 +424,9 @@ SAVE "256beeb", start, end, main
 ALIGN &100
 .bss_start
 
+.sinewave
+skip 256
+
 .bss_end
 
 \ ******************************************************************
@@ -476,7 +441,11 @@ PRINT "DATA size =",~data_end-data_start
 PRINT "BSS size =",~bss_end-bss_start
 PRINT "------"
 PRINT "HIGH WATERMARK =", ~P%
-PRINT "FREE =", ~start+_DEMO_SIZE-end
+IF (end-start) > _DEMO_SIZE
+PRINT "OVER =", ~(end-start)-_DEMO_SIZE
+ELSE
+PRINT "FREE =", ~_DEMO_SIZE-(end-start)
+ENDIF
 PRINT "------"
 
 \ ******************************************************************
