@@ -159,11 +159,11 @@ GUARD &9F
 \ *	CODE START
 \ ******************************************************************
 
-ORG &1900
+ORG &2000
 IF _DEBUG
 GUARD screen_addr			; ensure code size doesn't hit start of screen memory
 ELSE
-GUARD &1900+_DEMO_SIZE
+GUARD &2000+_DEMO_SIZE
 ENDIF
 
 .start
@@ -415,7 +415,7 @@ rts
 \ *	Save the code
 \ ******************************************************************
 
-SAVE "256beeb", start, end, main
+SAVE "barbeeb", start, end, main
 
 \ ******************************************************************
 \ *	Space reserved for runtime buffers not preinitialised

@@ -1,0 +1,11 @@
+bar-beeb
+
+Some Kefrens bars for the BBC Micro in 256 bytes.
+For the LoveByte party, March 2021.
+By kieranhj of the Bitshifters Collective.
+Visit us at: https://bitshifters.github.io/
+
+Should work on any stock BBC Micro 32K computer.
+To catalogue the disc type: *CAT
+To check filesize type: *INFO BARBEEB
+To run type: *RUN BARBEEB
